@@ -214,3 +214,9 @@ select {
   .stats { grid-template-columns: 1fr; }
   .brand { font-size: 30px; letter-spacing: 0.1em; }
 }
+
+.tag.bad { border-color: var(--danger); color: var(--danger); }
+.btn.active { border-color: var(--accent); background: rgba(224, 160, 69, 0.12); }
+.muted { color: var(--muted); font-size: 12px; }
+.detail { padding: 6px 4px 10px; color: var(--muted); font-size: 13px; }
+.detail p { margin: 4px 0; }

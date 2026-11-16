@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 from app.db import FIXTURES_DIR, connect
@@ -28,12 +29,16 @@ CREATE TABLE IF NOT EXISTS handovers (
   status TEXT NOT NULL,
   batch_count INTEGER NOT NULL DEFAULT 0,
   reason TEXT NOT NULL DEFAULT '',
+  from_shift_prev_status TEXT,
+  to_shift_prev_status TEXT,
   started_at TEXT NOT NULL,
   finished_at TEXT
 );
 CREATE TABLE IF NOT EXISTS handover_items (
   handover_id INTEGER NOT NULL REFERENCES handovers(id),
   batch_id INTEGER NOT NULL REFERENCES batches(id),
+  snapshot_owner_shift_id INTEGER,
+  snapshot_status TEXT,
   PRIMARY KEY (handover_id, batch_id)
 );
 CREATE TABLE IF NOT EXISTS reconcile_reports (
@@ -43,15 +48,46 @@ CREATE TABLE IF NOT EXISTS reconcile_reports (
   after_from_count INTEGER NOT NULL,
   after_to_count INTEGER NOT NULL,
   consistent INTEGER NOT NULL,
+  outcome TEXT NOT NULL DEFAULT '成功',
   detail_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
 """
 
+# 旧库升级：按需补列，保证已有本地 SQLite 数据可继续使用。
+_COLUMN_MIGRATIONS = (
+    ("handovers", "from_shift_prev_status", "TEXT"),
+    ("handovers", "to_shift_prev_status", "TEXT"),
+    ("handover_items", "snapshot_owner_shift_id", "INTEGER"),
+    ("handover_items", "snapshot_status", "TEXT"),
+    ("reconcile_reports", "outcome", "TEXT NOT NULL DEFAULT '成功'"),
+)
+
+
+def _ensure_columns(conn) -> None:
+    for table, column, decl in _COLUMN_MIGRATIONS:
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+def _ensure_single_active_index(conn) -> None:
+    """并发兜底：全仓最多一单「进行中」。旧库已有重复时跳过，不阻断启动。"""
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_handover_active "
+            "ON handovers(status) WHERE status = '进行中'"
+        )
+    except sqlite3.IntegrityError:
+        pass
+
 
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _ensure_columns(conn)
+        _ensure_single_active_index(conn)
+        conn.commit()
         n = conn.execute("SELECT COUNT(*) AS c FROM shifts").fetchone()["c"]
         if n:
             return
